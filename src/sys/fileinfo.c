@@ -669,7 +669,8 @@ static NTSTATUS FspFsvolQueryStreamInformationCopy(
     {
         StreamInfoSize = StreamInfo->Size;
 
-        if (sizeof(FSP_FSCTL_STREAM_INFO) > StreamInfoSize)
+        if (sizeof(FSP_FSCTL_STREAM_INFO) > StreamInfoSize ||
+            (SIZE_T)(StreamInfoEnd - (PUINT8)StreamInfo) < StreamInfoSize)
             break;
 
         StreamNameLength = StreamInfoSize - sizeof(FSP_FSCTL_STREAM_INFO) + STREAM_EXTRA_LENGTH;
