@@ -179,7 +179,8 @@ static NTSTATUS FspFsvolQueryDirectoryCopy(
         {
             DirInfoSize = DirInfo->Size;
 
-            if (sizeof(FSP_FSCTL_DIR_INFO) > DirInfoSize)
+            if (sizeof(FSP_FSCTL_DIR_INFO) > DirInfoSize ||
+                (SIZE_T)(DirInfoEnd - (PUINT8)DirInfo) < DirInfoSize)
             {
                 if (0 == *PDestLen)
                     return STATUS_NO_MORE_FILES;
