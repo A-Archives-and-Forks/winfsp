@@ -1523,6 +1523,8 @@ static VOID FspVolumeNotifyWork(PVOID NotifyWorkItem0)
             Unlock = TRUE;
             break;
         }
+        if ((SIZE_T)(NotifyInfoEnd - (PUINT8)NotifyInfo) < NotifyInfoSize)
+            break;
 
         FileName.Length =
         FileName.MaximumLength = (USHORT)(NotifyInfoSize - sizeof(FSP_FSCTL_NOTIFY_INFO));
