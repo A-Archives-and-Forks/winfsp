@@ -698,14 +698,18 @@ NTSTATUS FspOplockFsctrl(
 /* utility: synchronous work queue */
 typedef struct
 {
-    KEVENT Event;
+    LONG RefCount;
     PWORKER_THREAD_ROUTINE Routine;
     PVOID Context;
+    KEVENT Event;
     WORK_QUEUE_ITEM WorkQueueItem;
 } FSP_SYNCHRONOUS_WORK_ITEM;
+FSP_SYNCHRONOUS_WORK_ITEM *FspAllocateSynchronousWorkItem(
+    PWORKER_THREAD_ROUTINE Routine, PVOID Context);
 VOID FspInitializeSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
     PWORKER_THREAD_ROUTINE Routine, PVOID Context);
-VOID FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem);
+NTSTATUS FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
+    BOOLEAN Alertable);
 
 /* utility: delayed work queue */
 typedef struct
