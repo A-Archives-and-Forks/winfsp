@@ -121,6 +121,7 @@ NTSTATUS FspMainFileOpen(
 NTSTATUS FspMainFileClose(
     HANDLE MainFileHandle,
     PFILE_OBJECT MainFileObject);
+static WORKER_THREAD_ROUTINE FspMainFileCloseSynchronousWork;
 VOID FspFileNodeOplockPrepare(PVOID Context, PIRP Irp);
 VOID FspFileNodeOplockComplete(PVOID Context, PIRP Irp);
 
@@ -183,6 +184,7 @@ VOID FspFileNodeOplockComplete(PVOID Context, PIRP Irp);
 #pragma alloc_text(PAGE, FspFileDescSetDirectoryMarker)
 #pragma alloc_text(PAGE, FspMainFileOpen)
 #pragma alloc_text(PAGE, FspMainFileClose)
+#pragma alloc_text(PAGE, FspMainFileCloseSynchronousWork)
 #pragma alloc_text(PAGE, FspFileNodeOplockPrepare)
 #pragma alloc_text(PAGE, FspFileNodeOplockComplete)
 #endif
@@ -2803,12 +2805,40 @@ NTSTATUS FspMainFileClose(
 
     if (0 != MainFileHandle)
     {
-        Result = ObCloseHandle(MainFileHandle, KernelMode);
-        if (!NT_SUCCESS(Result))
-            DEBUGLOG("ObCloseHandle() = %s", NtStatusSym(Result));
+        FSP_SYNCHRONOUS_WORK_ITEM *WorkItem;
+
+        WorkItem = DEBUGTEST(90) ?
+            FspAllocateSynchronousWorkItem(FspMainFileCloseSynchronousWork, MainFileHandle) :
+            0;
+        if (0 != WorkItem)
+            /*
+             * Fix issue #680:
+             * Instead of closing the main file handle in this thread, close it in a system thread
+             * and wait for that close to complete in an alertable manner. This avoids a deadlock
+             * due to the file system process being forcibly terminated via NtTerminateProcess.
+             */
+            Result = FspExecuteSynchronousWorkItem(WorkItem, TRUE);
+        else
+            /*
+             * Best effort: Close the main file handle in this thread.
+             * Small chance of deadlock if someone is killing our file system.
+             */
+            FspMainFileCloseSynchronousWork(MainFileHandle);
     }
 
     return Result;
+}
+
+static VOID FspMainFileCloseSynchronousWork(PVOID Context)
+{
+    PAGED_CODE();
+
+    HANDLE MainFileHandle = Context;
+    NTSTATUS Result;
+
+    Result = ObCloseHandle(MainFileHandle, KernelMode);
+    if (!NT_SUCCESS(Result))
+        DEBUGLOG("ObCloseHandle() = %s", NtStatusSym(Result));
 }
 
 VOID FspFileNodeOplockPrepare(PVOID Context, PIRP Irp)

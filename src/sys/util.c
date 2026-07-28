@@ -115,9 +115,12 @@ NTSTATUS FspOplockFsctrl(
     POPLOCK Oplock,
     PIRP Irp,
     ULONG OpenCount);
+FSP_SYNCHRONOUS_WORK_ITEM *FspAllocateSynchronousWorkItem(
+    PWORKER_THREAD_ROUTINE Routine, PVOID Context);
 VOID FspInitializeSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
     PWORKER_THREAD_ROUTINE Routine, PVOID Context);
-VOID FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem);
+NTSTATUS FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
+    BOOLEAN Alertable);
 static WORKER_THREAD_ROUTINE FspExecuteSynchronousWorkItemRoutine;
 VOID FspInitializeDelayedWorkItem(FSP_DELAYED_WORK_ITEM *DelayedWorkItem,
     PWORKER_THREAD_ROUTINE Routine, PVOID Context);
@@ -167,6 +170,7 @@ LONG FspCompareUnicodeString(
 #pragma alloc_text(PAGE, FspCheckOplock)
 #pragma alloc_text(PAGE, FspCheckOplockEx)
 #pragma alloc_text(PAGE, FspOplockFsctrl)
+#pragma alloc_text(PAGE, FspAllocateSynchronousWorkItem)
 #pragma alloc_text(PAGE, FspInitializeSynchronousWorkItem)
 #pragma alloc_text(PAGE, FspExecuteSynchronousWorkItem)
 #pragma alloc_text(PAGE, FspExecuteSynchronousWorkItemRoutine)
@@ -1123,27 +1127,56 @@ NTSTATUS FspOplockFsctrl(
     return Result;
 }
 
+FSP_SYNCHRONOUS_WORK_ITEM *FspAllocateSynchronousWorkItem(
+    PWORKER_THREAD_ROUTINE Routine, PVOID Context)
+{
+    PAGED_CODE();
+
+    FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem;
+
+    SynchronousWorkItem = FspAllocNonPaged(sizeof *SynchronousWorkItem);
+    if (0 != SynchronousWorkItem)
+    {
+        FspInitializeSynchronousWorkItem(SynchronousWorkItem, Routine, Context);
+        SynchronousWorkItem->RefCount = 2; /* make it refcounted */
+    }
+
+    return SynchronousWorkItem;
+}
+
 VOID FspInitializeSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
     PWORKER_THREAD_ROUTINE Routine, PVOID Context)
 {
     PAGED_CODE();
 
-    KeInitializeEvent(&SynchronousWorkItem->Event, NotificationEvent, FALSE);
+    SynchronousWorkItem->RefCount = 0; /* initialize as non-refcounted */
     SynchronousWorkItem->Routine = Routine;
     SynchronousWorkItem->Context = Context;
+    KeInitializeEvent(&SynchronousWorkItem->Event, NotificationEvent, FALSE);
     ExInitializeWorkItem(&SynchronousWorkItem->WorkQueueItem,
         FspExecuteSynchronousWorkItemRoutine, SynchronousWorkItem);
 }
 
-VOID FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem)
+NTSTATUS FspExecuteSynchronousWorkItem(FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem,
+    BOOLEAN Alertable)
 {
     PAGED_CODE();
 
-    ExQueueWorkItem(&SynchronousWorkItem->WorkQueueItem, CriticalWorkQueue);
-
     NTSTATUS Result;
-    Result = KeWaitForSingleObject(&SynchronousWorkItem->Event, Executive, KernelMode, FALSE, 0);
-    ASSERT(STATUS_SUCCESS == Result);
+
+    /* Alertable=TRUE requires item allocated by FspAllocateSynchronousWorkItem */
+    ASSERT(!Alertable || 0 < SynchronousWorkItem->RefCount);
+
+    ExQueueWorkItem(&SynchronousWorkItem->WorkQueueItem, CriticalWorkQueue);
+    Result = KeWaitForSingleObject(&SynchronousWorkItem->Event, Executive, KernelMode, Alertable, 0);
+
+    if (0 < SynchronousWorkItem->RefCount)
+    {
+        if (0 == InterlockedDecrement(&SynchronousWorkItem->RefCount))
+            FspFree(SynchronousWorkItem);
+    }
+
+    return Result;
 }
 
 static VOID FspExecuteSynchronousWorkItemRoutine(PVOID Context)
@@ -1151,8 +1184,15 @@ static VOID FspExecuteSynchronousWorkItemRoutine(PVOID Context)
     PAGED_CODE();
 
     FSP_SYNCHRONOUS_WORK_ITEM *SynchronousWorkItem = Context;
+
     SynchronousWorkItem->Routine(SynchronousWorkItem->Context);
     KeSetEvent(&SynchronousWorkItem->Event, 1, FALSE);
+
+    if (0 < SynchronousWorkItem->RefCount)
+    {
+        if (0 == InterlockedDecrement(&SynchronousWorkItem->RefCount))
+            FspFree(SynchronousWorkItem);
+    }
 }
 
 VOID FspInitializeDelayedWorkItem(FSP_DELAYED_WORK_ITEM *DelayedWorkItem,
