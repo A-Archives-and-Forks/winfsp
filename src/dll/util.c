@@ -127,6 +127,11 @@ HANDLE FspCreateDirectoryFileW(
     Length = GetFullPathNameW(FileName, Length + 1, FullFileName, &FilePart);
     if (0 == Length)
         goto exit;
+    if (0 == FilePart)
+    {
+        SetLastError(ERROR_INVALID_NAME);
+        goto exit;
+    }
 
     FilePartChar = *FilePart;
     *FilePart = L'\0';
