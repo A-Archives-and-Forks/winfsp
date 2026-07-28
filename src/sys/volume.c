@@ -432,6 +432,9 @@ VOID FspVolumeDelete(
     ULONG FileNodeCount, Index;
     NTSTATUS Result;
 
+    /* stop the I/O queue */
+    FspIoqStop(FsvolDeviceExtension->Ioq, TRUE);
+
     FspFsvolDeviceVolumeDeleteAcquireExclusive(FsvolDeviceObject);
     FsvolDeviceExtension->VolumeDeleted = TRUE;
 
@@ -485,9 +488,6 @@ static VOID FspVolumeDeleteNoLock(
 
     PDEVICE_OBJECT FsvolDeviceObject = IrpSp->FileObject->FsContext2;
     FSP_FSVOL_DEVICE_EXTENSION *FsvolDeviceExtension = FspFsvolDeviceExtension(FsvolDeviceObject);
-
-    /* stop the I/O queue */
-    FspIoqStop(FsvolDeviceExtension->Ioq, TRUE);
 
     /* do we have a virtual disk device or are we registered with fsmup? */
     if (0 != FsvolDeviceExtension->FsvrtDeviceObject)
@@ -1381,6 +1381,7 @@ NTSTATUS FspVolumeNotify(
     ASSERT(0 != IrpSp->FileObject->FsContext2);
 
     PDEVICE_OBJECT FsvolDeviceObject = IrpSp->FileObject->FsContext2;
+    FSP_FSVOL_DEVICE_EXTENSION *FsvolDeviceExtension = FspFsvolDeviceExtension(FsvolDeviceObject);
     PVOID InputBuffer = IrpSp->Parameters.FileSystemControl.Type3InputBuffer;
     ULONG InputBufferLength = IrpSp->Parameters.FileSystemControl.InputBufferLength;
     FSP_VOLUME_NOTIFY_WORK_ITEM *NotifyWorkItem = 0;
@@ -1396,7 +1397,8 @@ NTSTATUS FspVolumeNotify(
         return STATUS_CANCELLED;
 
     FspFsvolDeviceVolumeDeleteAcquireShared(FsvolDeviceObject);
-    if (FspFsvolDeviceExtension(FsvolDeviceObject)->VolumeDeleted)
+    if (FsvolDeviceExtension->VolumeDeleted ||
+        FspIoqStopped(FsvolDeviceExtension->Ioq))
     {
         Result = STATUS_CANCELLED;
         goto fail;
